@@ -1,4 +1,9 @@
 #!/bin/bash
+# Copyright 2010 Austin Godber <godber@uberhip.com>
+#
+# This program is distributed under the terms of the Lesser GNU General Public
+# License
+
 
 set -e -u
 

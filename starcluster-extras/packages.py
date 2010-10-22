@@ -1,3 +1,8 @@
+# Copyright 2010 Austin Godber <godber@uberhip.com>
+#
+# This program is distributed under the terms of the Lesser GNU General Public
+# License
+
 from starcluster.clustersetup import ClusterSetup
 from starcluster.logger import log
 import os.path

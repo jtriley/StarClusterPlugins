@@ -56,11 +56,13 @@ Todo
  
  * Add more plugins.
 
-License
-=======
+License and Copyright
+=====================
 
-Not sure yet.  StarCluster itself is under the LGPL, which I will use if I have
-to.  Otherwise this will be MIT licensed.
+Copyright 2010 Austin Godber <godber@uberhip.com>
+
+This program is distributed under the terms of the Lesser GNU General Public
+License
 
 Contributors
 ============
