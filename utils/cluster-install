@@ -1,0 +1,60 @@
+#!/bin/bash
+
+set -e -u
+
+function error_msg() {
+    msg=$1
+    if [ -n "${msg}" ]; then
+        echo
+        echo "ERROR: ${msg}"
+    fi
+}
+
+function die () {
+    error_msg "${1}"
+    exit
+}
+
+function usage () {
+    error_msg "${1}"
+    cat <<END
+
+This is a wrapper for apt-get that installs packages on all nodes and stores
+the list of packages for future use.
+
+Usage:
+  cluster-install package1 [package2 package3 ...]
+
+END
+    exit
+}
+
+# Must be root
+if [ `id -u` != 0 ]; 
+then
+    echo "You must be root or use sudo to execute this script."
+    exit
+fi
+
+packages=$@
+if [ -z "${packages}" ]; then
+    usage "You must provide a package to install"
+fi
+
+# generate list of nodes from /etc/hosts, excluding the master
+nodelist=`grep node /etc/hosts | awk '{print $4}'`
+
+# Install packages on Master
+apt-get update || die "Failed to run apt-get update"
+apt-get -y install ${packages} || "Failed installing packages: ${packages}"
+
+# Install packages on Nodes
+for i in $nodelist
+do
+   ssh $i apt-get update
+   ssh $i apt-get -y install ${packages}
+done
+
+# Record packages on Master
+# assuming that /home/ is a persistant EBS volume
+dpkg --get-selections > /home/.starcluster-packages || die "Failed to save packages"
