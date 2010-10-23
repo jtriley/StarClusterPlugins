@@ -1,1 +1,9 @@
-*.pdf
+*.pyc
+*.swp
+*.pkl
+StarCluster.egg-info
+build
+dist
+docs/sphinx/_build
+docs/epydoc/apidocs
+src
