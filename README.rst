@@ -1,11 +1,10 @@
-starcluster-extras
-~~~~~~~~~~~~~~~~~~
+StarCluster-Plugins
+===================
 
-This project provides a place to collect StarCluster plugins and associated
-utilities.
+This project provides a place to collect user-contributed StarCluster plugins 
 
 Plugins
-=======
+-------
 
 The following plugins are included in this package:
 
