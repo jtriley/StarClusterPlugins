@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # Copyright 2010 Austin Godber <godber@uberhip.com>
 #
 # This program is distributed under the terms of the Lesser GNU General Public
@@ -5,7 +6,7 @@
 
 from starcluster.clustersetup import ClusterSetup
 from starcluster.logger import log
-import os.path
+
 
 class PackageLoader(ClusterSetup):
     """
@@ -20,6 +21,7 @@ class PackageLoader(ClusterSetup):
     """
     def __init__(self):
         log.debug('Running PackageLoader plugin.')
+
     def run(self, nodes, master, user, user_shell, volumes):
         pkgfile = '/home/.starcluster-packages'
         mconn = master.ssh
@@ -27,9 +29,10 @@ class PackageLoader(ClusterSetup):
         if mconn.path_exists(pkgfile):
             log.info("[PackageLoader] Package file found at: %s" % pkgfile)
             for node in nodes:
-                log.info("[PackageLoader] Installing packages on %s" % node.alias)
+                log.info(
+                    "[PackageLoader] Installing packages on %s" % node.alias)
                 node.ssh.execute('dpkg --set-selections < ' + pkgfile)
-                node.ssh.execute('apt-get update && apt-get -y dselect-upgrade')
+                node.ssh.execute(
+                    'apt-get update && apt-get -y dselect-upgrade')
         else:
             log.info("[PackageLoader] No package file found at: %s" % pkgfile)
-
