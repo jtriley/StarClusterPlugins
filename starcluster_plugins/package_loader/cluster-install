@@ -51,7 +51,7 @@ nodelist=`grep node /etc/hosts | awk '{print $4}'`
 
 # Install packages on Master
 apt-get update || die "Failed to run apt-get update"
-apt-get -y install ${packages} || "Failed installing packages: ${packages}"
+apt-get -y install ${packages} || die "Failed installing packages: ${packages}"
 
 # Install packages on Nodes
 for i in $nodelist
