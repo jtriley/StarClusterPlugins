@@ -1,15 +1,7 @@
 #!/usr/bin/env python
-"""
-Hadoop Plugin for StarCluster
-
-Author: Justin Riley
-
-Use this plugin with any StarCluster AMI that has "hadoop" in
-it's name. You can check for hadoop compatible AMIs in the output of
-'starcluster listpublic'.
-"""
 import posixpath
 
+from starcluster import threadpool
 from starcluster.clustersetup import ClusterSetup
 from starcluster.logger import log
 
@@ -54,7 +46,7 @@ hdfs_site_templ = """\
 </property>
 <property>
   <name>dfs.replication</name>
-  <value>%(num_nodes)d</value>
+  <value>%(replication)d</value>
   <description>Default block replication.
   The actual number of replications can be specified when the file is created.
   The default is used if replication is not specified in create time.
@@ -92,69 +84,122 @@ class Hadoop(ClusterSetup):
         self.hadoop_tmpdir = hadoop_tmpdir
         self.hadoop_conf = '/etc/hadoop-0.20/conf.starcluster'
         self.empty_conf = '/etc/hadoop-0.20/conf.empty'
+        self._pool = None
+
+    @property
+    def pool(self):
+        if self._pool is None:
+            self._pool = threadpool.get_thread_pool(20, disable_threads=False)
+        return self._pool
+
+    def _setup_hadoop_user(self, node, user):
+        node.ssh.execute('gpasswd -a %s hadoop' % user)
+
+    def _install_empty_conf(self, node):
+        node.ssh.execute('cp -r %s %s' % (self.empty_conf, self.hadoop_conf))
+        cmd = 'update-alternatives --install /etc/hadoop-0.20/conf '
+        cmd += 'hadoop-0.20-conf %s 50' % self.hadoop_conf
+        node.ssh.execute(cmd)
+
+    def _configure_env(self, node):
+        env_file_sh = posixpath.join(self.hadoop_conf, 'hadoop-env.sh')
+        node.ssh.remove_lines_from_file(env_file_sh, 'JAVA_HOME')
+        env_file = node.ssh.remote_file(env_file_sh, 'a')
+        env_file.write('export JAVA_HOME=/usr/lib/jvm/java-6-sun/jre\n')
+        env_file.close()
+
+    def _configure_mapreduce_site(self, node, cfg):
+        mapred_site_xml = posixpath.join(self.hadoop_conf, 'mapred-site.xml')
+        mapred_site = node.ssh.remote_file(mapred_site_xml)
+        mapred_site.write(mapred_site_templ % cfg)
+        mapred_site.close()
+
+    def _configure_core(self, node, cfg):
+        core_site_xml = posixpath.join(self.hadoop_conf, 'core-site.xml')
+        core_site = node.ssh.remote_file(core_site_xml)
+        core_site.write(core_site_templ % cfg)
+        core_site.close()
+
+    def _configure_hdfs_site(self, node, cfg):
+        hdfs_site_xml = posixpath.join(self.hadoop_conf, 'hdfs-site.xml')
+        hdfs_site = node.ssh.remote_file(hdfs_site_xml)
+        hdfs_site.write(hdfs_site_templ % cfg)
+        hdfs_site.close()
+
+    def _configure_masters(self, node, master):
+        masters_file = posixpath.join(self.hadoop_conf, 'masters')
+        masters_file = node.ssh.remote_file(masters_file)
+        masters_file.write(master.alias)
+        masters_file.close()
+
+    def _configure_slaves(self, node, node_aliases):
+        slaves_file = posixpath.join(self.hadoop_conf, 'slaves')
+        slaves_file = node.ssh.remote_file(slaves_file)
+        slaves_file.write('\n'.join(node_aliases))
+        slaves_file.close()
+
+    def _setup_hdfs(self, node, user):
+        self._setup_hadoop_dir(node, self.hadoop_tmpdir, 'hdfs', 'hadoop')
+        mapred_dir = posixpath.join(self.hadoop_tmpdir, 'hadoop-mapred')
+        self._setup_hadoop_dir(node, mapred_dir, 'mapred', 'hadoop')
+        userdir = posixpath.join(self.hadoop_tmpdir, 'hadoop-%s' % user)
+        self._setup_hadoop_dir(node, userdir, user, 'hadoop')
+        hdfsdir = posixpath.join(self.hadoop_tmpdir, 'hadoop-hdfs')
+        if not node.ssh.isdir(hdfsdir):
+            node.ssh.execute("su hdfs -c 'hadoop namenode -format'")
+        self._setup_hadoop_dir(node, hdfsdir, 'hdfs', 'hadoop')
 
     def _configure_hadoop(self, master, nodes, user):
         log.info("Configuring Hadoop...")
         log.info("Adding user %s to hadoop group" % user)
         for node in nodes:
-            node.ssh.execute('gpasswd -a %s hadoop' % user)
+            self.pool.simple_job(self._setup_hadoop_user, (node, user),
+                                 jobid=node.alias)
+        self.pool.wait()
         node_aliases = map(lambda n: n.alias, nodes)
-        cfg = {'master': master.alias, 'num_nodes': len(nodes),
+        cfg = {'master': master.alias, 'replication': 3,
                'hadoop_tmpdir': posixpath.join(self.hadoop_tmpdir,
                                                'hadoop-${user.name}')}
+        log.info("Installing configuration templates...")
         for node in nodes:
-            node.ssh.execute('cp -r %s %s' % (self.empty_conf, self.hadoop_conf))
-            cmd = 'update-alternatives --install /etc/hadoop-0.20/conf '
-            cmd += 'hadoop-0.20-conf %s 50' % self.hadoop_conf
-            node.ssh.execute(cmd)
+            self.pool.simple_job(self._install_empty_conf, (node,),
+                                 jobid=node.alias)
+        self.pool.wait()
         log.info("Configuring environment...")
         for node in nodes:
-            env_file_sh = posixpath.join(self.hadoop_conf, 'hadoop-env.sh')
-            node.ssh.remove_lines_from_file(env_file_sh, 'JAVA_HOME')
-            env_file = node.ssh.remote_file(env_file_sh, 'a')
-            env_file.write('export JAVA_HOME=/usr/lib/jvm/java-6-sun/jre\n')
-            env_file.close()
+            self.pool.simple_job(self._configure_env, (node,),
+                                 jobid=node.alias)
+        self.pool.wait()
         log.info("Configuring MapReduce Site...")
         for node in nodes:
-            mapred_site_xml = posixpath.join(self.hadoop_conf, 'mapred-site.xml')
-            mapred_site = node.ssh.remote_file(mapred_site_xml)
-            mapred_site.write(mapred_site_templ % cfg)
-            mapred_site.close()
+            self.pool.simple_job(self._configure_mapreduce_site, (node, cfg),
+                                 jobid=node.alias)
+        self.pool.wait()
         log.info("Configuring Core Site...")
         for node in nodes:
-            core_site_xml = posixpath.join(self.hadoop_conf, 'core-site.xml')
-            core_site = node.ssh.remote_file(core_site_xml)
-            core_site.write(core_site_templ % cfg)
-            core_site.close()
+            self.pool.simple_job(self._configure_core, (node, cfg),
+                                 jobid=node.alias)
+        self.pool.wait()
         log.info("Configuring HDFS Site...")
         for node in nodes:
-            hdfs_site_xml = posixpath.join(self.hadoop_conf, 'hdfs-site.xml')
-            hdfs_site = node.ssh.remote_file(hdfs_site_xml)
-            hdfs_site.write(hdfs_site_templ % cfg)
-            hdfs_site.close()
+            self.pool.simple_job(self._configure_hdfs_site, (node, cfg),
+                                 jobid=node.alias)
+        self.pool.wait()
         log.info("Configuring masters file...")
         for node in nodes:
-            masters_file = posixpath.join(self.hadoop_conf, 'masters')
-            masters_file = node.ssh.remote_file(masters_file)
-            masters_file.write(master.alias)
-            masters_file.close()
+            self.pool.simple_job(self._configure_masters, (node, master),
+                                 jobid=node.alias)
+        self.pool.wait()
         log.info("Configuring slaves file...")
         for node in nodes:
-            slaves_file = posixpath.join(self.hadoop_conf, 'slaves')
-            slaves_file = node.ssh.remote_file(slaves_file)
-            slaves_file.write('\n'.join(node_aliases))
-            slaves_file.close()
-        log.info("Formatting HDFS...")
+            self.pool.simple_job(self._configure_slaves, (node, node_aliases),
+                                 jobid=node.alias)
+        self.pool.wait()
+        log.info("Configuring HDFS...")
         for node in nodes:
-            self._setup_hadoop_dir(node, self.hadoop_tmpdir, 'hdfs', 'hadoop')
-            mapred_dir = posixpath.join(self.hadoop_tmpdir, 'hadoop-mapred')
-            self._setup_hadoop_dir(node, mapred_dir, 'mapred', 'hadoop')
-            userdir = posixpath.join(self.hadoop_tmpdir, 'hadoop-%s' % user)
-            self._setup_hadoop_dir(node, userdir, user, 'hadoop')
-            hdfsdir = posixpath.join(self.hadoop_tmpdir, 'hadoop-hdfs')
-            if not node.ssh.isdir(hdfsdir):
-                node.ssh.execute("su hdfs -c 'hadoop namenode -format'")
-            self._setup_hadoop_dir(node, hdfsdir, 'hdfs', 'hadoop')
+            self.pool.simple_job(self._setup_hdfs, (node, user),
+                                 jobid=node.alias)
+        self.pool.wait()
 
     def _setup_hadoop_dir(self, node, path, user, group, permission="775"):
         if not node.ssh.isdir(path):
@@ -162,20 +207,47 @@ class Hadoop(ClusterSetup):
         node.ssh.execute("chown -R %s:hadoop %s" % (user, path))
         node.ssh.execute("chmod -R %s %s" % (permission, path))
 
+    def _start_datanode(self, node):
+        node.ssh.execute('/etc/init.d/hadoop-0.20-datanode restart')
+
+    def _start_tasktracker(self, node):
+        node.ssh.execute('/etc/init.d/hadoop-0.20-tasktracker restart')
+
     def _start_hadoop(self, master, nodes):
         log.info("Starting namenode...")
         master.ssh.execute('/etc/init.d/hadoop-0.20-namenode restart')
         log.info("Starting secondary namenode...")
         master.ssh.execute('/etc/init.d/hadoop-0.20-secondarynamenode restart')
+
         for node in nodes:
             log.info("Starting datanode on %s..." % node.alias)
-            node.ssh.execute('/etc/init.d/hadoop-0.20-datanode restart')
+            self.pool.simple_job(self._start_datanode, (node,),
+                                 jobid=node.alias)
+        self.pool.wait()
         log.info("Starting jobtracker...")
         master.ssh.execute('/etc/init.d/hadoop-0.20-jobtracker restart')
         for node in nodes:
             log.info("Starting tasktracker on %s..." % node.alias)
-            node.ssh.execute('/etc/init.d/hadoop-0.20-tasktracker restart')
+            self.pool.simple_job(self._start_tasktracker, (node,),
+                                 jobid=node.alias)
+        self.pool.wait()
+
+    def _open_ports(self, master):
+        ports = [50030, 54310, 54311]
+        ec2 = master.ec2
+        for group in master.cluster_groups:
+            for port in ports:
+                has_perm = ec2.has_permission(group, 'tcp', port, port,
+                                              '0.0.0.0/0')
+                if not has_perm:
+                    group.authorize('tcp', port, port, '0.0.0.0/0')
 
     def run(self, nodes, master, user, user_shell, volumes):
-        self._configure_hadoop(master, nodes, user)
-        self._start_hadoop(master, nodes)
+        try:
+            self._configure_hadoop(master, nodes, user)
+            self._start_hadoop(master, nodes)
+            self._open_ports(master)
+            log.info("Job tracker: http://%s:50030" % master.dns_name)
+        finally:
+            self.pool.shutdown()
+            self.pool.join()
