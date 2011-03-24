@@ -233,7 +233,7 @@ class Hadoop(ClusterSetup):
         self.pool.wait()
 
     def _open_ports(self, master):
-        ports = [50030, 54310, 54311]
+        ports = [50070, 50030]
         ec2 = master.ec2
         for group in master.cluster_groups:
             for port in ports:
@@ -247,7 +247,8 @@ class Hadoop(ClusterSetup):
             self._configure_hadoop(master, nodes, user)
             self._start_hadoop(master, nodes)
             self._open_ports(master)
-            log.info("Job tracker: http://%s:50030" % master.dns_name)
+            log.info("Job tracker status: http://%s:50030" % master.dns_name)
+            log.info("Namenode status: http://%s:50070" % master.dns_name)
         finally:
             self.pool.shutdown()
             self.pool.join()
