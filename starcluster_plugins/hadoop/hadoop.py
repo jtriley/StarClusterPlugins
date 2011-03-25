@@ -77,13 +77,18 @@ mapred_site_templ = """\
 
 class Hadoop(ClusterSetup):
     """
-    Configures Hadoop on StarCluster
+    Configures Hadoop using Cloudera packages on StarCluster
     """
 
     def __init__(self, hadoop_tmpdir='/mnt/hadoop'):
         self.hadoop_tmpdir = hadoop_tmpdir
+        self.hadoop_home = '/usr/lib/hadoop'
         self.hadoop_conf = '/etc/hadoop-0.20/conf.starcluster'
         self.empty_conf = '/etc/hadoop-0.20/conf.empty'
+        self.centos_java_home = '/usr/lib/jvm/java'
+        self.centos_alt_cmd = 'alternatives'
+        self.ubuntu_java_home = '/usr/lib/jvm/java-6-sun/jre'
+        self.ubuntu_alt_cmd = 'update-alternatives'
         self._pool = None
 
     @property
@@ -92,12 +97,25 @@ class Hadoop(ClusterSetup):
             self._pool = threadpool.get_thread_pool(20, disable_threads=False)
         return self._pool
 
+    def _get_java_home(self, node):
+        # check for CentOS, otherwise default to Ubuntu 10.04's JAVA_HOME
+        if node.ssh.isfile('/etc/redhat-release'):
+            return self.centos_java_home
+        return self.ubuntu_java_home
+
+    def _get_alternatives_cmd(self, node):
+        # check for CentOS, otherwise default to Ubuntu 10.04
+        if node.ssh.isfile('/etc/redhat-release'):
+            return self.centos_alt_cmd
+        return self.ubuntu_alt_cmd
+
     def _setup_hadoop_user(self, node, user):
         node.ssh.execute('gpasswd -a %s hadoop' % user)
 
     def _install_empty_conf(self, node):
         node.ssh.execute('cp -r %s %s' % (self.empty_conf, self.hadoop_conf))
-        cmd = 'update-alternatives --install /etc/hadoop-0.20/conf '
+        alternatives_cmd = self._get_alternatives_cmd(node)
+        cmd = '%s --install /etc/hadoop-0.20/conf ' % alternatives_cmd
         cmd += 'hadoop-0.20-conf %s 50' % self.hadoop_conf
         node.ssh.execute(cmd)
 
@@ -105,7 +123,7 @@ class Hadoop(ClusterSetup):
         env_file_sh = posixpath.join(self.hadoop_conf, 'hadoop-env.sh')
         node.ssh.remove_lines_from_file(env_file_sh, 'JAVA_HOME')
         env_file = node.ssh.remote_file(env_file_sh, 'a')
-        env_file.write('export JAVA_HOME=/usr/lib/jvm/java-6-sun/jre\n')
+        env_file.write('export JAVA_HOME=%s\n' % self._get_java_home(node))
         env_file.close()
 
     def _configure_mapreduce_site(self, node, cfg):
@@ -149,13 +167,19 @@ class Hadoop(ClusterSetup):
             node.ssh.execute("su hdfs -c 'hadoop namenode -format'")
         self._setup_hadoop_dir(node, hdfsdir, 'hdfs', 'hadoop')
 
+    def _setup_dumbo(self, node):
+        if not node.ssh.isfile('/etc/dumbo.conf'):
+            f = node.ssh.remote_file('/etc/dumbo.conf')
+            f.write('[hadoops]\nstarcluster: %s\n' % self.hadoop_home)
+            f.close()
+
     def _configure_hadoop(self, master, nodes, user):
         log.info("Configuring Hadoop...")
         log.info("Adding user %s to hadoop group" % user)
         for node in nodes:
             self.pool.simple_job(self._setup_hadoop_user, (node, user),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         node_aliases = map(lambda n: n.alias, nodes)
         cfg = {'master': master.alias, 'replication': 3,
                'hadoop_tmpdir': posixpath.join(self.hadoop_tmpdir,
@@ -164,42 +188,46 @@ class Hadoop(ClusterSetup):
         for node in nodes:
             self.pool.simple_job(self._install_empty_conf, (node,),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         log.info("Configuring environment...")
         for node in nodes:
             self.pool.simple_job(self._configure_env, (node,),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         log.info("Configuring MapReduce Site...")
         for node in nodes:
             self.pool.simple_job(self._configure_mapreduce_site, (node, cfg),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         log.info("Configuring Core Site...")
         for node in nodes:
             self.pool.simple_job(self._configure_core, (node, cfg),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         log.info("Configuring HDFS Site...")
         for node in nodes:
             self.pool.simple_job(self._configure_hdfs_site, (node, cfg),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         log.info("Configuring masters file...")
         for node in nodes:
             self.pool.simple_job(self._configure_masters, (node, master),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         log.info("Configuring slaves file...")
         for node in nodes:
             self.pool.simple_job(self._configure_slaves, (node, node_aliases),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
         log.info("Configuring HDFS...")
         for node in nodes:
             self.pool.simple_job(self._setup_hdfs, (node, user),
                                  jobid=node.alias)
-        self.pool.wait()
+        self.pool.wait(numtasks=len(nodes))
+        log.info("Configuring dumbo...")
+        for node in nodes:
+            self.pool.simple_job(self._setup_dumbo, (node,), jobid=node.alias)
+        self.pool.wait(numtasks=len(nodes))
 
     def _setup_hadoop_dir(self, node, path, user, group, permission="775"):
         if not node.ssh.isdir(path):
@@ -251,4 +279,3 @@ class Hadoop(ClusterSetup):
             log.info("Namenode status: http://%s:50070" % master.dns_name)
         finally:
             self.pool.shutdown()
-            self.pool.join()
