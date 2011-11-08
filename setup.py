@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 import os
-import sys
 from setuptools import setup, find_packages
 
 install_requires = [
+    "setuptools",
     "starcluster",
 ]
 
@@ -12,9 +12,8 @@ src = os.path.realpath(os.path.dirname(__file__))
 setup(
     name='StarClusterPlugins',
     version='0.9999',
-    package_dir={'starcluster_plugins': 'starcluster_plugins'},
     packages=find_packages(src),
-    #scripts=['bin/starcluster'],
+    namespace_packages=['starcluster'],
     install_requires=install_requires,
     zip_safe=True,
     download_url='http://github.com/jtriley/StarClusterPlugins',
